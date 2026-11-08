@@ -11,7 +11,7 @@
   }
   * { box-sizing:border-box; }
   body { margin:0; font-family:system-ui,"Hiragino Sans","Noto Sans JP",sans-serif; background:var(--bg); color:var(--text); }
-  main { display:grid; grid-template-columns:minmax(260px,340px) 1fr; gap:16px; padding:16px; min-height:100vh; }
+  main { display:grid; grid-template-columns:minmax(260px,340px) 1fr; gap:16px; padding:16px; min-height:100vh; align-items:start; }
   @media (max-width:720px) { main { grid-template-columns:1fr; } }
   section { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
   h1 { font-size:1.1rem; margin:0 0 12px; }
@@ -26,7 +26,7 @@
   #map path:hover { fill:var(--hover); }
   #map path.correct { fill:var(--ok); } #map path.wrong { fill:var(--ng); }
   #map.locked path { cursor:default; }
-  #err { color:var(--ng); font-size:.9rem; }
+  #err { color:var(--ng); font-size:.9rem; margin-top:12px; word-break:break-all; }
 </style>
 </head>
 <body>
@@ -46,9 +46,9 @@
 <script>
 // ===== 設定(使う地図データに合わせて変更) =====
 const CONFIG = {
-  geojson: "data/japan.geojson", // 都道府県/市町村のGeoJSON
-  idProp: "id",                  // 各地域を識別するプロパティ名
-  nameProp: "nam_ja"             // 表示名のプロパティ名
+  geojson: "data/japan.geojson",
+  idProp: "id",
+  nameProp: "nam_ja"
 };
 
 // ===== 問題データ(answer は idProp の値。ここは自由に増やす) =====
@@ -67,32 +67,16 @@ const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.f
 const idOf = f => String(f.properties[CONFIG.idProp]);
 const nameOf = f => f.properties[CONFIG.nameProp] ?? idOf(f);
 
-function drawMap(geo) {
-  const svg = d3.select("#map");
-  const w = 700, h = 640;
-  svg.attr("viewBox", `0 0 ${w} ${h}`);
-  features = geo.features;
-
-  const isOkinawa = f => idOf(f) === "47";
-  const onClick = function (e, d) { answer(d, this); };
-  const draw = (g, data, p) => g.selectAll("path").data(data).join("path")
-    .attr("d", p).on("click", onClick).append("title").text(d => nameOf(d));
-
-  // 本土(北海道〜九州)の範囲に合わせて表示する
-  const frame = { type: "MultiPoint", coordinates: [[128.5, 30], [146, 45.7]] };
-  const projection = d3.geoMercator().fitExtent([[10, 10], [w - 10, h - 10]], frame);
-  draw(svg.append("g"), features.filter(f => !isOkinawa(f)), d3.geoPath(projection));
-
-  // 沖縄は右下の枠に拡大して表示する
-  const okinawa = features.filter(isOkinawa);
-  if (okinawa.length) {
-    const size = 170;
-    const inset = svg.append("g").attr("transform", `translate(${w - size - 20},${h - size - 20})`);
-    inset.append("rect").attr("width", size).attr("height", size)
-      .style("fill", "none").style("stroke", "var(--line)").style("stroke-dasharray", "4 3");
-    const p2 = d3.geoMercator().fitExtent([[6, 6], [size - 6, size - 6]], { type: "FeatureCollection", features: okinawa });
-    draw(inset, okinawa, d3.geoPath(p2));
-  }
+function showQuestion() {
+  locked = false;
+  $("map").classList.remove("locked");
+  d3.selectAll("#map path").attr("class", null);
+  $("result").textContent = ""; $("result").className = "";
+  $("next").hidden = true;
+  const q = QUESTIONS[order[qi]];
+  $("status").textContent = `第 ${qi + 1} 問 / ${order.length}  正解 ${score}`;
+  $("clues").innerHTML = "";
+  q.clues.forEach(c => { const li = document.createElement("li"); li.textContent = c; $("clues").appendChild(li); });
 }
 
 function answer(f, el) {
@@ -117,7 +101,7 @@ function next() {
   $("clues").innerHTML = "";
   $("result").className = "";
   $("result").textContent = `終了!スコア ${score} / ${order.length}`;
-  $("next").textContent = "もう一度"; 
+  $("next").textContent = "もう一度";
   $("next").onclick = start;
 }
 
@@ -129,21 +113,43 @@ function start() {
 
 function drawMap(geo) {
   const svg = d3.select("#map");
-  const w = 600, h = 700;
+  const w = 700, h = 640;
   svg.attr("viewBox", `0 0 ${w} ${h}`);
-  const projection = d3.geoMercator().fitSize([w, h], geo);
-  const path = d3.geoPath(projection);
   features = geo.features;
-  svg.selectAll("path").data(features).join("path")
-    .attr("d", path)
-    .on("click", function (e, d) { answer(d, this); })
-    .append("title").text(d => nameOf(d));
+
+  const isOkinawa = f => idOf(f) === "47" || String(nameOf(f)).includes("沖縄");
+  const onClick = function (e, d) { answer(d, this); };
+  const draw = (g, data, p) => {
+    const paths = g.selectAll("path").data(data).join("path").attr("d", p).on("click", onClick);
+    paths.append("title").text(d => nameOf(d));
+  };
+
+  // 本土(北海道〜九州)の範囲に合わせて表示する
+  const frame = { type: "MultiPoint", coordinates: [[128.5, 30], [146, 45.7]] };
+  const projection = d3.geoMercator().fitExtent([[10, 10], [w - 10, h - 10]], frame);
+  draw(svg.append("g"), features.filter(f => !isOkinawa(f)), d3.geoPath(projection));
+
+  // 沖縄は右下の枠に拡大して表示する(失敗しても本体は動く)
+  try {
+    const okinawa = features.filter(isOkinawa);
+    if (okinawa.length) {
+      const size = 170;
+      const inset = svg.append("g").attr("transform", `translate(${w - size - 20},${h - size - 20})`);
+      inset.append("rect").attr("width", size).attr("height", size)
+        .style("fill", "none").style("stroke", "var(--line)").style("stroke-dasharray", "4 3");
+      const p2 = d3.geoMercator().fitExtent([[6, 6], [size - 6, size - 6]], { type: "FeatureCollection", features: okinawa });
+      draw(inset, okinawa, d3.geoPath(p2));
+    }
+  } catch (e) {
+    console.error(e);
+    $("err").textContent = "沖縄の枠の表示に失敗しました: " + e.message;
+  }
 }
 
 fetch(CONFIG.geojson)
-  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(r => { if (!r.ok) throw new Error("地図データを取得できません(HTTP " + r.status + "): " + CONFIG.geojson); return r.json(); })
   .then(geo => { drawMap(geo); start(); })
-  .catch(() => { $("err").textContent = `地図データ(${CONFIG.geojson})を読み込めませんでした。data フォルダに置いたか確認してください。`; });
+  .catch(e => { console.error(e); $("err").textContent = "エラー: " + e.message; });
 </script>
 </body>
 </html>
