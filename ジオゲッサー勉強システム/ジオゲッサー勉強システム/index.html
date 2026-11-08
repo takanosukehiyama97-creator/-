@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>地域推測トレーナー</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --text:#1c1f24; --line:#c9ced6; --land:#dfe6ee; --hover:#b8cbe0; --ok:#2e9e5b; --ng:#d9534f; --accent:#2b6cb0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171b; --panel:#1e2329; --text:#e8eaed; --line:#3a424c; --land:#2c3540; --hover:#3d5670; --ok:#3fb67a; --ng:#e5706c; --accent:#6aa7e6; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,"Hiragino Sans","Noto Sans JP",sans-serif; background:var(--bg); color:var(--text); }
+  main { display:grid; grid-template-columns:minmax(260px,340px) 1fr; gap:16px; padding:16px; min-height:100vh; align-items:start; }
+  @media (max-width:720px) { main { grid-template-columns:1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  h1 { font-size:1.1rem; margin:0 0 12px; }
+  .status { font-size:.9rem; opacity:.75; margin-bottom:12px; }
+  ul.clues { padding-left:1.2em; margin:0 0 16px; line-height:1.7; }
+  #result { min-height:2.8em; font-weight:600; }
+  #result.ok { color:var(--ok); } #result.ng { color:var(--ng); }
+  button { font:inherit; padding:8px 16px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button[hidden] { display:none; }
+  #map { width:100%; height:auto; max-height:90vh; display:block; }
+  #map path { fill:var(--land); stroke:var(--line); stroke-width:.5; cursor:pointer; transition:fill .1s; }
+  #map path:hover { fill:var(--hover); }
+  #map path.correct { fill:var(--ok); } #map path.wrong { fill:var(--ng); }
+  #map.locked path { cursor:default; }
+  #err { color:var(--ng); font-size:.9rem; margin-top:12px; word-break:break-all; }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <h1>地域推測トレーナー</h1>
+    <div class="status" id="status"></div>
+    <ul class="clues" id="clues"></ul>
+    <div id="result"></div>
+    <button id="next" hidden>次の問題へ</button>
+    <div id="err"></div>
+  </section>
+  <section><svg id="map"></svg></section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+// ===== 設定(使う地図データに合わせて変更) =====
+const CONFIG = {
+  geojson: "data/japan.geojson",
+  idProp: "id",
+  nameProp: "nam_ja"
+};
+
+// ===== 問題データ(answer は idProp の値。ここは自由に増やす) =====
+const QUESTIONS = [
+  { clues: ["ナンバープレートに「なにわ」とある", "道路脇にたこ焼き屋の看板が多い"], answer: 27 },
+  { clues: ["ナンバープレートに「那覇」とある", "道路標識に英語併記が多く、赤瓦の家が目立つ"], answer: 47 },
+  { clues: ["ナンバープレートに「札幌」「函館」などがある", "矢羽根(雪用の縦長の標識)が道路脇に立つ"], answer: 1 },
+  { clues: ["ナンバープレートに「土浦」とある"], answer: 8 }
+];
+
+// ===== 以下ゲーム本体 =====
+const $ = id => document.getElementById(id);
+let features = [], order = [], qi = 0, score = 0, locked = false;
+
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const idOf = f => String(f.properties[CONFIG.idProp]);
+const nameOf = f => f.properties[CONFIG.nameProp] ?? idOf(f);
+
+function showQuestion() {
+  locked = false;
+  $("map").classList.remove("locked");
+  d3.selectAll("#map path").attr("class", null);
+  $("result").textContent = ""; $("result").className = "";
+  $("next").hidden = true;
+  const q = QUESTIONS[order[qi]];
+  $("status").textContent = `第 ${qi + 1} 問 / ${order.length}  正解 ${score}`;
+  $("clues").innerHTML = "";
+  q.clues.forEach(c => { const li = document.createElement("li"); li.textContent = c; $("clues").appendChild(li); });
+}
+
+function answer(f, el) {
+  if (locked) return;
+  locked = true;
+  $("map").classList.add("locked");
+  const q = QUESTIONS[order[qi]];
+  const right = idOf(f) === String(q.answer);
+  const target = features.find(x => idOf(x) === String(q.answer));
+  if (right) score++;
+  d3.select(el).classed(right ? "correct" : "wrong", true);
+  d3.selectAll("#map path").filter(d => d === target).classed("correct", true);
+  $("result").className = right ? "ok" : "ng";
+  $("result").textContent = right ? `正解!(${nameOf(target)})` : `不正解。あなた: ${nameOf(f)} / 正解: ${nameOf(target)}`;
+  $("status").textContent = `第 ${qi + 1} 問 / ${order.length}  正解 ${score}`;
+  $("next").hidden = false;
+  $("next").textContent = qi + 1 < order.length ? "次の問題へ" : "結果を見る";
+}
+
+function next() {
+  if (qi + 1 < order.length) { qi++; showQuestion(); return; }
+  $("clues").innerHTML = "";
+  $("result").className = "";
+  $("result").textContent = `終了!スコア ${score} / ${order.length}`;
+  $("next").textContent = "もう一度";
+  $("next").onclick = start;
+}
+
+function start() {
+  order = shuffle(QUESTIONS.map((_, i) => i)); qi = 0; score = 0;
+  $("next").onclick = next;
+  showQuestion();
+}
+
+function drawMap(geo) {
+  const svg = d3.select("#map");
+  const w = 700, h = 640;
+  svg.attr("viewBox", `0 0 ${w} ${h}`);
+  features = geo.features;
+
+  const isOkinawa = f => idOf(f) === "47" || String(nameOf(f)).includes("沖縄");
+  const onClick = function (e, d) { answer(d, this); };
+  const draw = (g, data, p) => {
+    const paths = g.selectAll("path").data(data).join("path").attr("d", p).on("click", onClick);
+    paths.append("title").text(d => nameOf(d));
+  };
+
+  // 本土(北海道〜九州)の範囲に合わせて表示する
+  const frame = { type: "MultiPoint", coordinates: [[128.5, 30], [146, 45.7]] };
+  const projection = d3.geoMercator().fitExtent([[10, 10], [w - 10, h - 10]], frame);
+  draw(svg.append("g"), features.filter(f => !isOkinawa(f)), d3.geoPath(projection));
+
+  // 沖縄は右下の枠に拡大して表示する(失敗しても本体は動く)
+  try {
+    const okinawa = features.filter(isOkinawa);
+    if (okinawa.length) {
+      const size = 170;
+      const inset = svg.append("g").attr("transform", `translate(${w - size - 20},${h - size - 20})`);
+      inset.append("rect").attr("width", size).attr("height", size)
+        .style("fill", "none").style("stroke", "var(--line)").style("stroke-dasharray", "4 3");
+      const p2 = d3.geoMercator().fitExtent([[6, 6], [size - 6, size - 6]], { type: "FeatureCollection", features: okinawa });
+      draw(inset, okinawa, d3.geoPath(p2));
+    }
+  } catch (e) {
+    console.error(e);
+    $("err").textContent = "沖縄の枠の表示に失敗しました: " + e.message;
+  }
+}
+
+fetch(CONFIG.geojson)
+  .then(r => { if (!r.ok) throw new Error("地図データを取得できません(HTTP " + r.status + "): " + CONFIG.geojson); return r.json(); })
+  .then(geo => { drawMap(geo); start(); })
+  .catch(e => { console.error(e); $("err").textContent = "エラー: " + e.message; });
+</script>
+</body>
+</html>
